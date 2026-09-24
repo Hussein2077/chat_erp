@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:chat_erp/models/global_chat_event.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -8,6 +9,7 @@ import 'core/auth/user_session.dart';
 import 'core/constants/api_constants.dart';
 import 'models/chat_models.dart';
 import 'services/chat_api_service.dart';
+import 'services/chat_sse_service.dart';
 
 void main() {
   runApp(const ChatApp());
@@ -108,10 +110,14 @@ class _UserTile extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(user.displayName,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text('@${user.username}',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                  Text(
+                    user.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    '@${user.username}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
                 ],
               ),
               const Spacer(),
@@ -135,6 +141,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final ChatApiService _api = ChatApiService();
+  final ChatSseService _sse = ChatSseService();
+  StreamSubscription<GlobalChatEvent>? _sseSub;
 
   // Chat list state
   List<ChatSummaryModel> _chats = [];
@@ -164,6 +172,12 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadChats();
     _connectWs();
+    // Start SSE and listen for chat list updates
+    _sse.start();
+    _sseSub = _sse.eventStream.listen((event) {
+      // Refresh chat list on any SSE event
+      _refreshChatList();
+    });
   }
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
@@ -321,6 +335,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _currentSub?.call();
     _stomp?.deactivate();
+    _sseSub?.cancel();
+    _sse.dispose();
     _msgCtrl.dispose();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
@@ -427,11 +443,14 @@ class _LeftPanel extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(currentUser.displayName,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15)),
+                    Text(
+                      currentUser.displayName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
                     Row(
                       children: [
                         Icon(
@@ -495,16 +514,16 @@ class _LeftPanel extends StatelessWidget {
           child: loadingChats && chats.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : searchCtrl.text.isNotEmpty
-                  ? _SearchResultsList(
-                      results: searchResults,
-                      searching: searching,
-                      onSelectUser: onSelectUser,
-                    )
-                  : _ChatList(
-                      chats: chats,
-                      selectedChat: selectedChat,
-                      onSelectChat: onSelectChat,
-                    ),
+              ? _SearchResultsList(
+                  results: searchResults,
+                  searching: searching,
+                  onSelectUser: onSelectUser,
+                )
+              : _ChatList(
+                  chats: chats,
+                  selectedChat: selectedChat,
+                  onSelectChat: onSelectChat,
+                ),
         ),
       ],
     );
@@ -526,8 +545,11 @@ class _ChatList extends StatelessWidget {
   Widget build(BuildContext context) {
     if (chats.isEmpty) {
       return const Center(
-        child: Text('No chats yet.\nSearch for a user to start.',
-            textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+        child: Text(
+          'No chats yet.\nSearch for a user to start.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey),
+        ),
       );
     }
     return ListView.separated(
@@ -557,7 +579,9 @@ class _ChatList extends StatelessWidget {
                             child: Text(
                               chat.name ?? 'Chat ${chat.id}',
                               style: const TextStyle(
-                                  fontWeight: FontWeight.w600, fontSize: 15),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -582,7 +606,9 @@ class _ChatList extends StatelessWidget {
                                       ? '📎 ${lastMsg!.attachments.first.fileName}'
                                       : 'No messages'),
                               style: const TextStyle(
-                                  fontSize: 13, color: Colors.grey),
+                                fontSize: 13,
+                                color: Colors.grey,
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -596,7 +622,9 @@ class _ChatList extends StatelessWidget {
                               child: Text(
                                 chat.unreadCount.toString(),
                                 style: const TextStyle(
-                                    color: Colors.white, fontSize: 11),
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                ),
                               ),
                             ),
                         ],
@@ -629,7 +657,8 @@ class _SearchResultsList extends StatelessWidget {
     if (searching) return const Center(child: CircularProgressIndicator());
     if (results.isEmpty) {
       return const Center(
-          child: Text('No users found', style: TextStyle(color: Colors.grey)));
+        child: Text('No users found', style: TextStyle(color: Colors.grey)),
+      );
     }
     return ListView.builder(
       itemCount: results.length,
@@ -661,11 +690,15 @@ class _EmptyPanel extends StatelessWidget {
           children: [
             Icon(Icons.chat_bubble_outline, size: 80, color: Colors.grey),
             SizedBox(height: 16),
-            Text('Select a chat to start messaging',
-                style: TextStyle(fontSize: 16, color: Colors.grey)),
+            Text(
+              'Select a chat to start messaging',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
             SizedBox(height: 8),
-            Text('Or search for a user to create a new chat',
-                style: TextStyle(fontSize: 13, color: Colors.grey)),
+            Text(
+              'Or search for a user to create a new chat',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
           ],
         ),
       ),
@@ -709,9 +742,10 @@ class _ChatPanel extends StatelessWidget {
               Text(
                 chat.name ?? 'Chat ${chat.id}',
                 style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16),
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
               const Spacer(),
               Container(
@@ -735,20 +769,23 @@ class _ChatPanel extends StatelessWidget {
             child: loading
                 ? const Center(child: CircularProgressIndicator())
                 : messages.isEmpty
-                    ? const Center(
-                        child: Text('No messages yet. Say hello! 👋',
-                            style: TextStyle(color: Colors.grey)))
-                    : ListView.builder(
-                        controller: scrollCtrl,
-                        reverse: true,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        itemCount: messages.length,
-                        itemBuilder: (_, i) => _MessageBubble(
-                          message: messages[i],
-                          api: api,
-                        ),
-                      ),
+                ? const Center(
+                    child: Text(
+                      'No messages yet. Say hello! 👋',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                : ListView.builder(
+                    controller: scrollCtrl,
+                    reverse: true,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    itemCount: messages.length,
+                    itemBuilder: (_, i) =>
+                        _MessageBubble(message: messages[i], api: api),
+                  ),
           ),
         ),
         // Input bar
@@ -772,7 +809,9 @@ class _ChatPanel extends StatelessWidget {
                     filled: true,
                     fillColor: Colors.white,
                     contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
                       borderSide: BorderSide.none,
@@ -830,7 +869,11 @@ class _MessageBubble extends StatelessWidget {
             bottomRight: Radius.circular(isMe ? 2 : 12),
           ),
           boxShadow: [
-            BoxShadow(color: Colors.black12, blurRadius: 2, offset: const Offset(0, 1))
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
           ],
         ),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -842,22 +885,27 @@ class _MessageBubble extends StatelessWidget {
               Text(
                 message.sender.displayName,
                 style: const TextStyle(
-                    color: Color(0xFF075E54),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12),
+                  color: Color(0xFF075E54),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             // Text content
             if (message.content != null && message.content!.isNotEmpty)
               Padding(
                 padding: EdgeInsets.only(top: isMe ? 0 : 2),
-                child: Text(message.content!,
-                    style: const TextStyle(fontSize: 14)),
+                child: Text(
+                  message.content!,
+                  style: const TextStyle(fontSize: 14),
+                ),
               ),
             // Attachments
-            ...message.attachments.map((att) => _AttachmentRow(
-                  attachment: att,
-                  downloadUrl: api.getFileDownloadUrl(att.id),
-                )),
+            ...message.attachments.map(
+              (att) => _AttachmentRow(
+                attachment: att,
+                downloadUrl: api.getFileDownloadUrl(att.id),
+              ),
+            ),
             // Time
             Align(
               alignment: Alignment.bottomRight,
@@ -896,7 +944,11 @@ class _AttachmentRow extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.insert_drive_file, size: 18, color: Color(0xFF075E54)),
+            const Icon(
+              Icons.insert_drive_file,
+              size: 18,
+              color: Color(0xFF075E54),
+            ),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
@@ -942,9 +994,10 @@ class _Avatar extends StatelessWidget {
       child: Text(
         name.isNotEmpty ? name[0].toUpperCase() : '?',
         style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: radius * 0.8),
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: radius * 0.8,
+        ),
       ),
     );
   }
