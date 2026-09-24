@@ -1,9 +1,19 @@
+import 'package:flutter/foundation.dart';
+
 class MockUser {
   final int id;
   final String username;
   final String displayName;
 
   const MockUser(this.id, this.username, this.displayName);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MockUser && runtimeType == other.runtimeType && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
 }
 
 class UserSession {
@@ -15,9 +25,12 @@ class UserSession {
     MockUser(5, 'omar', 'Omar Yasser'),
   ];
 
-  static MockUser currentUser = staticUsers.first;
+  static final ValueNotifier<MockUser> currentUserNotifier =
+      ValueNotifier<MockUser>(staticUsers[0]);
+
+  static MockUser get currentUser => currentUserNotifier.value;
 
   static void switchUser(MockUser user) {
-    currentUser = user;
+    currentUserNotifier.value = user;
   }
 }

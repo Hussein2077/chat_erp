@@ -1,121 +1,383 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'core/auth/user_session.dart';
+import 'models/chat_models.dart';
+import 'services/chat_api_service.dart';
+import 'services/chat_websocket_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const ChatApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class ChatApp extends StatelessWidget {
+  const ChatApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Chat App',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        primarySwatch: Colors.blue,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const ChatListScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class ChatListScreen extends StatefulWidget {
+  const ChatListScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ChatListScreen> createState() => _ChatListScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ChatListScreenState extends State<ChatListScreen> {
+  final ChatApiService _apiService = ChatApiService();
+  List<ChatSummaryModel> _chats = [];
+  bool _isLoading = false;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  @override
+  void initState() {
+    super.initState();
+    _loadChats();
+  }
+
+  Future<void> _loadChats() async {
+    setState(() => _isLoading = true);
+    try {
+      final chats = await _apiService.listChats();
+      setState(() => _chats = chats);
+    } catch (e) {
+      print('Failed to load chats: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Chats'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SearchUsersScreen()),
+              );
+              _loadChats(); // Reload chats when coming back
+            },
+          ),
+          DropdownButton<MockUser>(
+            value: UserSession.currentUser,
+            icon: const Icon(Icons.person, color: Colors.white),
+            dropdownColor: Colors.blue,
+            style: const TextStyle(color: Colors.white),
+            onChanged: (MockUser? newValue) {
+              if (newValue != null) {
+                setState(() {
+                  UserSession.switchUser(newValue);
+                  _loadChats();
+                });
+              }
+            },
+            items: UserSession.staticUsers.map<DropdownMenuItem<MockUser>>((MockUser user) {
+              return DropdownMenuItem<MockUser>(
+                value: user,
+                child: Text(user.displayName),
+              );
+            }).toList(),
+          ),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadChats,
+              child: ListView.builder(
+                itemCount: _chats.length,
+                itemBuilder: (context, index) {
+                  final chat = _chats[index];
+                  return ListTile(
+                    title: Text(chat.name ?? 'Chat ${chat.id}'),
+                    subtitle: Text(chat.lastMessage?.content ?? 'No messages yet'),
+                    trailing: chat.unreadCount > 0
+                        ? CircleAvatar(
+                            radius: 12,
+                            backgroundColor: Colors.red,
+                            child: Text(
+                              chat.unreadCount.toString(),
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          )
+                        : null,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ChatScreen(
+                            chatId: chat.id,
+                            chatName: chat.name ?? 'Chat ${chat.id}',
+                          ),
+                        ),
+                      ).then((_) => _loadChats());
+                    },
+                  );
+                },
+              ),
             ),
-          ],
+    );
+  }
+}
+
+class SearchUsersScreen extends StatefulWidget {
+  const SearchUsersScreen({super.key});
+
+  @override
+  State<SearchUsersScreen> createState() => _SearchUsersScreenState();
+}
+
+class _SearchUsersScreenState extends State<SearchUsersScreen> {
+  final ChatApiService _apiService = ChatApiService();
+  List<UserModel> _users = [];
+  bool _isLoading = false;
+  final TextEditingController _searchController = TextEditingController();
+
+  Future<void> _searchUsers(String query) async {
+    setState(() => _isLoading = true);
+    try {
+      final users = await _apiService.searchUsers(query);
+      setState(() => _users = users);
+    } catch (e) {
+      print('Search error: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _startChat(int userId) async {
+    try {
+      final chatData = await _apiService.getOrCreatePrivateChat(userId);
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatScreen(
+              chatId: chatData['id'],
+              chatName: chatData['name'] ?? 'Private Chat',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Create chat error: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Search Users'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search...',
+                fillColor: Colors.white,
+                filled: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.search),
+                  onPressed: () => _searchUsers(_searchController.text),
+                ),
+              ),
+              onSubmitted: _searchUsers,
+            ),
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: _users.length,
+              itemBuilder: (context, index) {
+                final user = _users[index];
+                return ListTile(
+                  title: Text(user.displayName),
+                  subtitle: Text('@${user.username}'),
+                  onTap: () => _startChat(user.id),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class ChatScreen extends StatefulWidget {
+  final int chatId;
+  final String chatName;
+
+  const ChatScreen({super.key, required this.chatId, required this.chatName});
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final ChatApiService _apiService = ChatApiService();
+  final ChatWebSocketService _wsService = ChatWebSocketService();
+  final TextEditingController _msgController = TextEditingController();
+  
+  List<MessageModel> _messages = [];
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+    _wsService.connect(onConnected: _onWsConnected);
+  }
+
+  void _onWsConnected() {
+    _wsService.subscribeToChat(widget.chatId, (message) {
+      if (mounted) {
+        setState(() {
+          _messages.insert(0, message);
+        });
+        _apiService.markRead(widget.chatId, message.id);
+      }
+    });
+  }
+
+  Future<void> _loadMessages() async {
+    setState(() => _isLoading = true);
+    try {
+      final res = await _apiService.getMessages(widget.chatId);
+      setState(() {
+        _messages = res['messages'] as List<MessageModel>;
+      });
+      if (_messages.isNotEmpty) {
+        _apiService.markRead(widget.chatId, _messages.first.id);
+      }
+    } catch (e) {
+      print('Load messages error: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final text = _msgController.text.trim();
+    if (text.isEmpty) return;
+    _wsService.sendMessage(widget.chatId, text);
+    _msgController.clear();
+  }
+
+  Future<void> _uploadFile() async {
+    try {
+      final file = await FilePicker.pickFile();
+      if (file != null) {
+        final message = await _apiService.uploadFileMessage(
+          chatId: widget.chatId,
+          file: file,
+        );
+        setState(() {
+          _messages.insert(0, message);
+        });
+      }
+    } catch (e) {
+      print('File upload error: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _wsService.unsubscribeFromChat(widget.chatId);
+    _wsService.disconnect();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.chatName)),
+      body: Column(
+        children: [
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    reverse: true,
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[index];
+                      final isMe = msg.sender.id == UserSession.currentUser.id;
+                      
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isMe ? Colors.blue[100] : Colors.grey[300],
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(msg.sender.displayName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              if (msg.content != null && msg.content!.isNotEmpty)
+                                Text(msg.content!),
+                              if (msg.attachments.isNotEmpty)
+                                ...msg.attachments.map((att) => InkWell(
+                                  onTap: () {
+                                    launchUrl(Uri.parse(_apiService.getFileDownloadUrl(att.id)));
+                                  },
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.attach_file),
+                                      Text(att.fileName),
+                                    ],
+                                  ),
+                                ))
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.attach_file),
+                  onPressed: _uploadFile,
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _msgController,
+                    decoration: const InputDecoration(hintText: 'Type a message...'),
+                    onSubmitted: (_) => _sendMessage(),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: _sendMessage,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
